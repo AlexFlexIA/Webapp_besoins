@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qualification des Projets WebApp</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .choice { transition: background .12s, border-color .12s; }
+  .choice:hover { background: #f1f5f9; }
+  .choice.sel { border-color: #4f46e5; background: #eef2ff; }
+  .fiche h2 { font-size: 1rem; font-weight: 600; margin: 1.25rem 0 .4rem; color: #0f172a; border-bottom: 1px solid #e2e8f0; padding-bottom: .25rem; }
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff !important; }
+    .print-card { box-shadow: none !important; border: none !important; padding: 0 !important; }
+  }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+<header class="no-print bg-slate-900 text-white">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+    <div class="flex items-center gap-3">
+      <div class="h-8 w-8 rounded bg-indigo-500 grid place-items-center font-bold">Q</div>
+      <div>
+        <div class="font-semibold leading-tight">Qualification &amp; Arbitrage des Projets WebApp</div>
+        <div class="text-xs text-slate-400">Gouvernance IT · cadrage avant développement</div>
+      </div>
+    </div>
+    <nav class="flex gap-2 text-sm">
+      <button data-action="nav" data-view="dashboard" id="nav-dashboard" class="px-3 py-1.5 rounded hover:bg-slate-700">Dashboard</button>
+      <button data-action="new" id="nav-new" class="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500">+ Nouvelle demande</button>
+    </nav>
+  </div>
+</header>
+<main id="app" class="max-w-6xl mx-auto px-4 py-6"></main>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- Constantes métier ---------- */
+const STORE_KEY = 'qap.projects.v1';
+const DRAFT_KEY = 'qap.draft.v1';
+
+const STATUS = {
+  GO:             { label: 'GO',                                   cls: 'bg-emerald-100 text-emerald-800 ring-emerald-200', big: 'bg-emerald-600' },
+  GO_RESERVE:     { label: 'GO sous réserve - Scope restreint',    cls: 'bg-amber-100 text-amber-800 ring-amber-200',       big: 'bg-amber-500' },
+  NO_GO_DSI:      { label: 'NO-GO - Orienté DSI',                  cls: 'bg-rose-100 text-rose-800 ring-rose-200',          big: 'bg-rose-600' },
+  NO_GO_REFERENT: { label: 'NO-GO - Manque de Référent Métier',    cls: 'bg-rose-100 text-rose-800 ring-rose-200',          big: 'bg-rose-600' },
+  NO_GO_PREREQ:   { label: 'NO-GO - Prérequis bloquants manquants',cls: 'bg-rose-100 text-rose-800 ring-rose-200',          big: 'bg-rose-600' },
+};
+const CATEGORY = {
+  1: 'Cat. 1 · Palliatif temporaire DSI / ERP',
+  2: 'Cat. 2 · Simplification & outillage métier (GSheets)',
+  0: 'Hors catégorie',
+};
+
+const SCOPE_OK = [
+  ['saisie',  'Simplifier la saisie (formulaires, listes, contrôles)'],
+  ['calcul',  'Automatiser des calculs / consolidations'],
+  ['vues',    'Vues, priorisation, tableaux de bord de lecture'],
+  ['export',  'Export / impression de documents'],
+];
+const SCOPE_DRIFT = [
+  ['erp_rt',  'Connexion ERP en temps réel', true],
+  ['mail_wf', 'Gestion lourde de mails / workflows de validation', true],
+  ['transac', 'Gestion transactionnelle (commandes, stocks, facturation)', false],
+  ['refs',    'Référentiels ERP synchronisés (articles, clients, fournisseurs)', false],
+];
+const HEAVY = [
+  ['erp_rt',  'Connexions ERP en temps réel'],
+  ['mail_wf', 'Gestion lourde de mails / workflows'],
+  ['none',    'Aucun de ces éléments'],
+];
+const labelOf = (list, k) => (list.find(x => x[0] === k) || [])[1] || k;
+
+/* ---------- Moteur de décision ---------- */
+const has = (a, k, v) => (a[k] || []).includes(v);
+const heavy = a => has(a, 'heavy', 'erp_rt') || has(a, 'heavy', 'mail_wf') || has(a, 'scope', 'erp_rt') || has(a, 'scope', 'mail_wf');
+const drift = a => (a.scope || []).some(k => SCOPE_DRIFT.some(d => d[0] === k)) || a.scopeStrict === 'no';
+
+function category(a) {
+  if (a.market === 'yes') return 1;
+  if (a.market === 'no' && a.manual === 'yes') return drift(a) ? 1 : 2;
+  if (a.market === 'no' && a.manual === 'no') return 0;
+  return null;
+}
+const rebascule = a => a.market === 'no' && a.manual === 'yes' && drift(a);
+
+function filters(a) {
+  return {
+    referent: !!(a.f_referent && (a.referentName || '').trim()),
+    env:      !!a.f_env,
+    parties:  !!a.f_parties,
+  };
+}
+
+function computeVerdict(a) {
+  const cat = category(a);
+  const f = filters(a);
+  const blockers = [];   // motifs de refus
+  const reserves = [];
+  let dsi = false;
+
+  if (cat === 0) {
+    dsi = true;
+    blockers.push("La demande ne relève d'aucune catégorie (ni périmètre outil/ERP, ni simplification GSheets) : à réorienter vers la DSI.");
+  }
+  if (cat === 1) {
+    if (heavy(a)) {
+      dsi = true;
+      blockers.push("La demande inclut des connexions ERP temps réel et/ou une gestion lourde de mails/workflows : développement interne rejeté, réorientation vers la DSI.");
+    }
+    if (a.market === 'yes' && a.costly === 'no') {
+      dsi = true;
+      blockers.push("L'outil/ERP du marché est déployable à coût et délai acceptables : pas de palliatif interne justifié.");
+    }
+    if (a.dsiValid !== 'yes') {
+      dsi = true;
+      blockers.push("Validation DSI obligatoire non obtenue.");
+    }
+    if (a.temp !== 'yes') {
+      dsi = true;
+      blockers.push("Pas d'engagement de reprise par la DSI à terme : le caractère temporaire n'est pas garanti.");
+    }
+  }
+  const missing = [];
+  if (!f.referent) missing.push('Responsable métier désigné');
+  if (!f.env)      missing.push('Environnement de développement');
+  if (!f.parties)  missing.push('Accord des parties prenantes');
+
+  let status;
+  if (dsi) status = 'NO_GO_DSI';
+  else if (!f.referent) status = 'NO_GO_REFERENT';
+  else if (missing.length) status = 'NO_GO_PREREQ';
+  else status = cat === 1 ? 'GO' : 'GO_RESERVE';
+
+  if (missing.length) blockers.push('Filtres bloquants non satisfaits : ' + missing.join(', ') + '.');
+  if (status === 'GO_RESERVE') reserves.push("Scope strictement limité aux fonctions listées ; toute dérive vers un périmètre ERP rebascule automatiquement le projet en Catégorie 1.");
+  if (status === 'GO' && cat === 1) reserves.push("Solution temporaire : reprise par la DSI à terme (engagement obtenu).");
+  if (rebascule(a)) reserves.unshift("Le projet a été rebasculé de la Catégorie 2 vers la Catégorie 1 (dérive vers un périmètre ERP).");
+
+  return { status, category: cat, blockers, reserves, missing };
+}
+
+/* ---------- Étapes du questionnaire ---------- */
+const yn = (id, title, help, extra = {}) => ({ id, type: 'yesno', title, help, ...extra });
+const STEPS = [
+  { id: 'identity', type: 'identity', title: 'Identification de la demande', help: 'Décrivez le besoin et ses limites de périmètre.' },
+  yn('market', "Le besoin relève-t-il d'un périmètre couvert par un outil du marché ou par l'ERP ?",
+     "Ex. ordonnancement Campénéac/Glomel, gestion complète des réclamations."),
+  yn('costly', "Le déploiement de l'outil / ERP est-il trop cher ou trop long pour répondre au besoin immédiat ?",
+     "« Non » signifie que la solution du marché doit être privilégiée.", { show: a => a.market === 'yes' }),
+  yn('manual', "Le besoin consiste-t-il à automatiser un travail manuel ou à désengorger des fichiers Google Sheets ?",
+     "Sujet non couvert par le marché (ex. prévisions engrais, priorisation).", { show: a => a.market === 'no' }),
+  { id: 'scope', type: 'multi', key: 'scope', title: "Que doit faire l'outil ? (cochez tout ce qui est prévu)",
+    help: "Le scope doit rester strictement limité. Les éléments ERP font basculer le projet en Catégorie 1.",
+    show: a => a.market === 'no' && a.manual === 'yes',
+    options: () => [...SCOPE_OK.map(([k, l]) => [k, l, false]), ...SCOPE_DRIFT.map(([k, l]) => [k, l, true])] },
+  yn('scopeStrict', "Pouvez-vous vous engager à un scope strictement limité (ex. simplifier la saisie) ?",
+     "Un « Non » révèle une dérive de périmètre : le projet rebascule en Catégorie 1.",
+     { show: a => a.market === 'no' && a.manual === 'yes' }),
+  { id: 'heavy', type: 'multi', key: 'heavy', exclusive: 'none', title: 'La demande inclut-elle des éléments lourds ?',
+    help: "Connexions ERP temps réel ou gestion lourde de mails/workflows → rejet du développement interne.",
+    show: a => category(a) === 1 && !rebascule(a), options: () => HEAVY.map(([k, l]) => [k, l, k !== 'none']) },
+  yn('dsiValid', "La DSI a-t-elle validé cette solution palliative ?", "Validation DSI obligatoire pour la Catégorie 1.",
+     { show: a => category(a) === 1 }),
+  yn('temp', "Existe-t-il un engagement de reprise par la DSI à terme (caractère temporaire) ?",
+     "Sans engagement de reprise, le palliatif n'est pas acceptable.", { show: a => category(a) === 1 }),
+  { id: 'filters', type: 'filters', title: 'Filtres bloquants (NO-GO si non cochés)',
+    help: "Ces trois conditions sont obligatoires, quelle que soit la catégorie." },
+  { id: 'result', type: 'result', title: 'Verdict & fiche de cadrage', help: '' },
+];
+const visibleSteps = a => STEPS.filter(s => !s.show || s.show(a));
+
+/* ---------- État & persistance ---------- */
+const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const S = {
+  view: 'dashboard',
+  projects: load(STORE_KEY, []),
+  draft: load(DRAFT_KEY, null),   // { a: answers, step: id }
+  fiche: null,
+  filter: { q: '', status: '', cat: '' },
+  error: '',
+};
+const persistProjects = () => save(STORE_KEY, S.projects);
+const persistDraft = () => save(DRAFT_KEY, S.draft);
+
+/* ---------- Utilitaires ---------- */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtDate = iso => new Date(iso).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const badge = (cls, txt) => `<span class="inline-block px-2 py-0.5 rounded-full text-xs font-medium ring-1 ${cls}">${esc(txt)}</span>`;
+const statusBadge = s => badge(STATUS[s].cls, STATUS[s].label);
+const catBadge = c => badge(c === 1 ? 'bg-indigo-50 text-indigo-700 ring-indigo-200' : c === 2 ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-600 ring-slate-200', CATEGORY[c]);
+const uid = () => 'P-' + Date.now().toString(36).toUpperCase();
+
+/* ---------- Fiche de cadrage ---------- */
+function scopeLists(a) {
+  const sel = a.scope || [];
+  return {
+    inScope: SCOPE_OK.filter(([k]) => sel.includes(k)).map(x => x[1]),
+    drift: SCOPE_DRIFT.filter(([k]) => sel.includes(k)).map(x => x[1]),
+  };
+}
+const yesNo = v => v === 'yes' ? 'Oui' : v === 'no' ? 'Non' : '—';
+const check = v => v ? '☑' : '☐';
+
+function ficheModel(p) {
+  const a = p.answers, v = p.verdict, f = filters(a), sl = scopeLists(a);
+  return { p, a, v, f, sl };
+}
+
+function ficheMarkdown(p) {
+  const { a, v, f, sl } = ficheModel(p);
+  const L = [];
+  L.push(`# Fiche de cadrage — ${a.title}`, '', `**Référence :** ${p.id} · **Date :** ${fmtDate(p.date)}`, '');
+  L.push(`**Statut :** ${STATUS[v.status].label}`, `**Catégorie :** ${CATEGORY[v.category]}`, '');
+  L.push('## Demandeur', `- Demandeur : ${a.requester || '—'}`, `- Service : ${a.service || '—'}`, '');
+  L.push('## Besoin exprimé', a.description || '—', '');
+  L.push('## Limites de périmètre', a.limits || '—', '');
+  if (sl.inScope.length) L.push('**Fonctions dans le scope :**', ...sl.inScope.map(x => `- ${x}`), '');
+  if (sl.drift.length) L.push('**Éléments hors scope (dérive ERP) :**', ...sl.drift.map(x => `- ${x}`), '');
+  L.push('## Responsable métier', `- Nom : ${(a.referentName || '').trim() || '—'}`, '');
+  L.push('## Filtres bloquants',
+    `- ${check(f.referent)} Responsable métier désigné (aisance informatique, gestion/maintenance de l'usage)`,
+    `- ${check(f.env)} Environnement de développement propre, isolé et efficace`,
+    `- ${check(f.parties)} Accord des parties prenantes (GO en instance d'arbitrage)`, '');
+  if (v.category === 1) L.push('## Engagements DSI', `- Validation DSI : ${yesNo(a.dsiValid)}`, `- Engagement de reprise à terme : ${yesNo(a.temp)}`, '');
+  if (v.blockers.length) L.push('## Motifs de blocage', ...v.blockers.map(x => `- ${x}`), '');
+  if (v.reserves.length) L.push('## Réserves', ...v.reserves.map(x => `- ${x}`), '');
+  return L.join('\n');
+}
+
+function ficheHtml(p) {
+  const { a, v, f, sl } = ficheModel(p);
+  const ul = arr => arr.length ? `<ul class="list-disc ml-5 space-y-0.5">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  const para = t => `<p class="whitespace-pre-wrap">${esc(t || '—')}</p>`;
+  const row = (ok, t) => `<li>${check(ok)} ${esc(t)}</li>`;
+  return `
+  <div class="fiche text-sm leading-relaxed">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <div class="text-xs uppercase tracking-wide text-slate-500">Fiche de cadrage</div>
+        <h1 class="text-xl font-bold">${esc(a.title)}</h1>
+        <div class="text-slate-500 text-xs mt-1">Réf. ${esc(p.id)} · ${fmtDate(p.date)}</div>
+      </div>
+      <div class="text-right space-y-1">${statusBadge(v.status)}<br>${catBadge(v.category)}</div>
+    </div>
+    <h2>Demandeur</h2>
+    <p>${esc(a.requester || '—')} · ${esc(a.service || '—')}</p>
+    <h2>Besoin exprimé</h2>${para(a.description)}
+    <h2>Limites de périmètre</h2>${para(a.limits)}
+    ${sl.inScope.length ? `<p class="mt-2 font-medium">Fonctions dans le scope</p>${ul(sl.inScope)}` : ''}
+    ${sl.drift.length ? `<p class="mt-2 font-medium">Éléments hors scope (dérive ERP)</p>${ul(sl.drift)}` : ''}
+    <h2>Responsable métier</h2>
+    <p><strong>${esc((a.referentName || '').trim() || '—')}</strong></p>
+    <h2>Filtres bloquants</h2>
+    <ul class="space-y-0.5 list-none">
+      ${row(f.referent, "Responsable métier désigné (aisance informatique, gestion/maintenance de l'usage)")}
+      ${row(f.env, 'Environnement de développement propre, isolé et efficace')}
+      ${row(f.parties, "Accord des parties prenantes (GO en instance d'arbitrage)")}
+    </ul>
+    ${v.category === 1 ? `<h2>Engagements DSI</h2><ul class="list-disc ml-5"><li>Validation DSI : ${yesNo(a.dsiValid)}</li><li>Engagement de reprise à terme : ${yesNo(a.temp)}</li></ul>` : ''}
+    ${v.blockers.length ? `<h2>Motifs de blocage</h2>${ul(v.blockers)}` : ''}
+    ${v.reserves.length ? `<h2>Réserves</h2>${ul(v.reserves)}` : ''}
+  </div>`;
+}
+
+/* ---------- Vues ---------- */
+function viewDashboard() {
+  const all = S.projects, q = S.filter.q.toLowerCase();
+  const rows = all.filter(p =>
+    (!S.filter.status || p.verdict.status === S.filter.status) &&
+    (S.filter.cat === '' || String(p.verdict.category) === S.filter.cat) &&
+    (!q || [p.answers.title, p.answers.requester, p.answers.referentName, p.id].join(' ').toLowerCase().includes(q)));
+  const count = s => all.filter(p => p.verdict.status === s).length;
+  const kpi = (t, n, c) => `<div class="bg-white rounded-lg border border-slate-200 p-4"><div class="text-xs text-slate-500">${t}</div><div class="text-2xl font-semibold ${c}">${n}</div></div>`;
+  const sel = (id, opts, cur) => `<select id="${id}" class="border border-slate-300 rounded px-2 py-1.5 text-sm bg-white">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+  return `
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+    <h1 class="text-xl font-semibold">Dashboard de suivi</h1>
+    <div class="flex gap-2">
+      <button data-action="export-csv" class="px-3 py-1.5 text-sm border border-slate-300 rounded bg-white hover:bg-slate-100">Exporter CSV</button>
+      <button data-action="new" class="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-500">+ Nouvelle demande</button>
+    </div>
+  </div>
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+    ${kpi('Projets soumis', all.length, 'text-slate-800')}
+    ${kpi('GO', count('GO'), 'text-emerald-600')}
+    ${kpi('GO sous réserve', count('GO_RESERVE'), 'text-amber-600')}
+    ${kpi('NO-GO Orienté DSI', count('NO_GO_DSI'), 'text-rose-600')}
+    ${kpi('Autres NO-GO', count('NO_GO_REFERENT') + count('NO_GO_PREREQ'), 'text-rose-600')}
+  </div>
+  <div class="flex flex-wrap gap-2 mb-3">
+    <input id="f-q" value="${esc(S.filter.q)}" placeholder="Rechercher (projet, demandeur, responsable)…" class="border border-slate-300 rounded px-3 py-1.5 text-sm w-72 bg-white">
+    ${sel('f-status', [['', 'Tous les statuts'], ...Object.entries(STATUS).map(([k, s]) => [k, s.label])], S.filter.status)}
+    ${sel('f-cat', [['', 'Toutes catégories'], ['1', 'Catégorie 1'], ['2', 'Catégorie 2'], ['0', 'Hors catégorie']], S.filter.cat)}
+  </div>
+  <div class="bg-white border border-slate-200 rounded-lg overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-slate-100 text-left text-xs uppercase text-slate-500">
+        <tr><th class="p-3">Projet</th><th class="p-3">Catégorie</th><th class="p-3">Statut</th><th class="p-3">Responsable métier</th><th class="p-3">Date</th><th class="p-3"></th></tr>
+      </thead>
+      <tbody>
+      ${rows.map(p => `
+        <tr class="border-t border-slate-100 hover:bg-slate-50">
+          <td class="p-3"><div class="font-medium">${esc(p.answers.title)}</div><div class="text-xs text-slate-500">${esc(p.id)} · ${esc(p.answers.requester || '')}</div></td>
+          <td class="p-3">${catBadge(p.verdict.category)}</td>
+          <td class="p-3">${statusBadge(p.verdict.status)}</td>
+          <td class="p-3">${esc((p.answers.referentName || '').trim() || '—')}</td>
+          <td class="p-3 whitespace-nowrap">${fmtDate(p.date)}</td>
+          <td class="p-3 whitespace-nowrap text-right">
+            <button data-action="open" data-id="${esc(p.id)}" class="text-indigo-600 hover:underline mr-3">Fiche</button>
+            <button data-action="delete" data-id="${esc(p.id)}" class="text-slate-400 hover:text-rose-600">Supprimer</button>
+          </td>
+        </tr>`).join('') || `<tr><td colspan="6" class="p-8 text-center text-slate-500">${all.length ? 'Aucun résultat pour ces filtres.' : 'Aucun projet soumis. Lancez une première qualification.'}</td></tr>`}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function choiceBtn(action, attrs, text, on) {
+  return `<button type="button" data-action="${action}" ${attrs} class="choice ${on ? 'sel' : ''} w-full text-left border border-slate-300 rounded-lg px-4 py-3 text-sm">
+    <span class="inline-block w-4 h-4 mr-2 align-middle rounded-full border ${on ? 'bg-indigo-600 border-indigo-600' : 'border-slate-400'}"></span>${esc(text)}</button>`;
+}
+
+function stepBody(step, a) {
+  switch (step.type) {
+    case 'identity': {
+      const fld = (k, label, ph, area) => `<label class="block"><span class="text-sm font-medium">${label}</span>
+        ${area ? `<textarea data-field="${k}" rows="3" placeholder="${ph}" class="mt-1 w-full border border-slate-300 rounded px-3 py-2 text-sm">${esc(a[k] || '')}</textarea>`
+               : `<input data-field="${k}" value="${esc(a[k] || '')}" placeholder="${ph}" class="mt-1 w-full border border-slate-300 rounded px-3 py-2 text-sm">`}</label>`;
+      return `<div class="space-y-4">
+        ${fld('title', 'Titre du projet *', 'Ex. Prévisions engrais')}
+        <div class="grid sm:grid-cols-2 gap-4">${fld('requester', 'Demandeur *', 'Nom Prénom')}${fld('service', 'Service / Direction', 'Ex. Production')}</div>
+        ${fld('description', 'Besoin exprimé *', 'Décrivez le besoin métier et le problème à résoudre', true)}
+        ${fld('limits', 'Limites de périmètre *', 'Ce que l’outil ne fera pas', true)}</div>`;
+    }
+    case 'yesno':
+      return `<div class="grid sm:grid-cols-2 gap-3">
+        ${choiceBtn('answer', `data-key="${step.id}" data-val="yes"`, 'Oui', a[step.id] === 'yes')}
+        ${choiceBtn('answer', `data-key="${step.id}" data-val="no"`, 'Non', a[step.id] === 'no')}</div>`;
+    case 'multi': {
+      const cur = a[step.key] || [];
+      const warn = step.id === 'scope' && drift(a) && a.market === 'no'
+        ? `<div class="mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded p-3">⚠ Dérive vers un périmètre ERP : le projet rebasculera en <strong>Catégorie 1</strong>.</div>` : '';
+      return `<div class="space-y-2">${step.options(a).map(([k, l, isDrift]) =>
+        choiceBtn('toggle', `data-key="${step.key}" data-val="${k}"`, l + (isDrift && step.id === 'scope' ? '  (périmètre ERP)' : ''), cur.includes(k))).join('')}</div>${warn}`;
+    }
+    case 'filters': {
+      const box = (k, t, d) => `<button type="button" data-action="flag" data-key="${k}" class="choice ${a[k] ? 'sel' : ''} w-full text-left border border-slate-300 rounded-lg px-4 py-3 text-sm flex gap-3">
+        <span class="mt-0.5 w-4 h-4 shrink-0 rounded border ${a[k] ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-400'} grid place-items-center text-[10px]">${a[k] ? '✓' : ''}</span>
+        <span><span class="font-medium">${t}</span><br><span class="text-slate-500">${d}</span></span></button>`;
+      return `<div class="space-y-3">
+        <label class="block"><span class="text-sm font-medium">Nom du responsable métier</span>
+          <input data-field="referentName" value="${esc(a.referentName || '')}" placeholder="Nom Prénom" class="mt-1 w-full border border-slate-300 rounded px-3 py-2 text-sm"></label>
+        ${box('f_referent', 'Responsable métier désigné', "Porteur identifié nominativement, avec l'aisance informatique requise, qui s'engage à gérer/maintenir l'usage de l'application.")}
+        ${box('f_env', 'Environnement de développement', 'Un environnement de dev propre, isolé et efficace est disponible pour l’équipe technique.')}
+        ${box('f_parties', 'Accord des parties prenantes', 'GO explicite obtenu en instance d’arbitrage (contrôle de gestion / direction).')}</div>`;
+    }
+  }
+  return '';
+}
+
+function viewWizard() {
+  const d = S.draft, a = d.a, steps = visibleSteps(a);
+  const idx = Math.max(0, steps.findIndex(s => s.id === d.step));
+  const step = steps[idx];
+  const pct = Math.round(idx / (steps.length - 1) * 100);
+  const banner = rebascule(a) && step.id !== 'scope' && step.id !== 'scopeStrict'
+    ? `<div class="mb-4 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded p-3">Projet rebasculé en <strong>Catégorie 1</strong> (dérive vers un périmètre ERP).</div>` : '';
+  let body;
+  if (step.type === 'result') {
+    const p = buildProject(a), v = p.verdict;
+    body = `
+      <div class="rounded-lg text-white p-5 ${STATUS[v.status].big}"><div class="text-xs uppercase opacity-80">Verdict automatisé</div><div class="text-xl font-semibold">[${esc(STATUS[v.status].label)}]</div><div class="text-sm opacity-90 mt-1">${esc(CATEGORY[v.category])}</div></div>
+      ${v.blockers.length ? `<h3 class="font-semibold mt-5 mb-1">Motifs</h3><ul class="list-disc ml-5 text-sm space-y-1">${v.blockers.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+      ${v.reserves.length ? `<h3 class="font-semibold mt-5 mb-1">Réserves</h3><ul class="list-disc ml-5 text-sm space-y-1">${v.reserves.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+      <p class="text-sm text-slate-500 mt-5">Enregistrez la demande pour l’ajouter au dashboard et générer la fiche de cadrage. Les demandes NO-GO sont conservées pour traçabilité.</p>`;
+  } else {
+    body = stepBody(step, a);
+  }
+  return `
+  <div class="max-w-2xl mx-auto">
+    <div class="flex justify-between text-xs text-slate-500 mb-1"><span>Étape ${idx + 1} / ${steps.length}</span><button data-action="cancel" class="hover:text-rose-600">Abandonner</button></div>
+    <div class="h-1.5 bg-slate-200 rounded mb-5"><div class="h-1.5 bg-indigo-600 rounded" style="width:${pct}%"></div></div>
+    <div class="bg-white border border-slate-200 rounded-lg p-6">
+      ${banner}
+      <h2 class="text-lg font-semibold">${esc(step.title)}</h2>
+      ${step.help ? `<p class="text-sm text-slate-500 mt-1 mb-4">${esc(step.help)}</p>` : '<div class="mb-4"></div>'}
+      ${body}
+      ${S.error ? `<div class="mt-4 text-sm text-rose-600">${esc(S.error)}</div>` : ''}
+      <div class="flex justify-between mt-6">
+        <button data-action="prev" class="px-4 py-2 text-sm border border-slate-300 rounded ${idx === 0 ? 'invisible' : 'hover:bg-slate-100'}">← Précédent</button>
+        ${step.type === 'result'
+          ? `<button data-action="submit" class="px-4 py-2 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-500">Enregistrer &amp; générer la fiche</button>`
+          : `<button data-action="next" class="px-4 py-2 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-500">Suivant →</button>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function viewFiche() {
+  const p = S.projects.find(x => x.id === S.fiche);
+  if (!p) return '<p>Fiche introuvable.</p>';
+  return `
+  <div class="max-w-3xl mx-auto">
+    <div class="no-print flex flex-wrap gap-2 justify-between mb-4">
+      <button data-action="nav" data-view="dashboard" class="px-3 py-1.5 text-sm border border-slate-300 rounded bg-white hover:bg-slate-100">← Dashboard</button>
+      <div class="flex gap-2">
+        <button data-action="copy-md" data-id="${esc(p.id)}" class="px-3 py-1.5 text-sm border border-slate-300 rounded bg-white hover:bg-slate-100">Copier Markdown</button>
+        <button data-action="dl-md" data-id="${esc(p.id)}" class="px-3 py-1.5 text-sm border border-slate-300 rounded bg-white hover:bg-slate-100">Télécharger .md</button>
+        <button data-action="print" class="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-500">Imprimer / PDF</button>
+      </div>
+    </div>
+    <div class="print-card bg-white border border-slate-200 rounded-lg p-8">${ficheHtml(p)}</div>
+  </div>`;
+}
+
+/* ---------- Rendu ---------- */
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = S.view === 'dashboard' ? viewDashboard() : S.view === 'wizard' ? viewWizard() : viewFiche();
+  document.getElementById('nav-dashboard').classList.toggle('bg-slate-700', S.view === 'dashboard');
+}
+
+function buildProject(a) {
+  return { id: S.draft?.id || uid(), date: new Date().toISOString(), answers: JSON.parse(JSON.stringify(a)), verdict: computeVerdict(a) };
+}
+
+/* ---------- Validation d'étape ---------- */
+function validate(step, a) {
+  if (step.type === 'identity') {
+    for (const [k, l] of [['title', 'Titre'], ['requester', 'Demandeur'], ['description', 'Besoin exprimé'], ['limits', 'Limites de périmètre']])
+      if (!(a[k] || '').trim()) return `Le champ « ${l} » est obligatoire.`;
+  }
+  if (step.type === 'yesno' && !a[step.id]) return 'Veuillez répondre à la question.';
+  if (step.type === 'multi' && step.id === 'heavy' && !(a.heavy || []).length) return 'Sélectionnez au moins une option.';
+  return '';
+}
+
+/* ---------- Actions ---------- */
+function startDraft() {
+  S.draft = S.draft || { id: uid(), a: {}, step: 'identity' };
+  persistDraft(); S.view = 'wizard'; S.error = ''; render();
+}
+function go(delta) {
+  const steps = visibleSteps(S.draft.a);
+  const i = steps.findIndex(s => s.id === S.draft.step);
+  if (delta > 0) {
+    const err = validate(steps[i], S.draft.a);
+    if (err) { S.error = err; return render(); }
+  }
+  S.error = '';
+  S.draft.step = steps[Math.min(steps.length - 1, Math.max(0, i + delta))].id;
+  persistDraft(); render(); window.scrollTo(0, 0);
+}
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const el = Object.assign(document.createElement('a'), { href: url, download: name });
+  document.body.appendChild(el); el.click(); el.remove(); URL.revokeObjectURL(url);
+}
+const slug = s => (s || 'projet').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+const ACTIONS = {
+  nav: el => { S.view = el.dataset.view; render(); },
+  new: () => startDraft(),
+  cancel: () => { if (confirm('Abandonner cette demande en cours ?')) { S.draft = null; persistDraft(); S.view = 'dashboard'; render(); } },
+  next: () => go(1),
+  prev: () => go(-1),
+  answer: el => { S.draft.a[el.dataset.key] = el.dataset.val; S.error = ''; persistDraft(); render(); },
+  toggle: el => {
+    const { key, val } = el.dataset, step = STEPS.find(s => s.key === key), cur = new Set(S.draft.a[key] || []);
+    if (cur.has(val)) cur.delete(val);
+    else { if (step.exclusive === val) cur.clear(); else if (step.exclusive) cur.delete(step.exclusive); cur.add(val); }
+    S.draft.a[key] = [...cur]; persistDraft(); render();
+  },
+  flag: el => { S.draft.a[el.dataset.key] = !S.draft.a[el.dataset.key]; persistDraft(); render(); },
+  submit: () => {
+    const p = buildProject(S.draft.a);
+    S.projects.unshift(p); persistProjects();
+    S.draft = null; persistDraft();
+    S.fiche = p.id; S.view = 'fiche'; render(); window.scrollTo(0, 0);
+  },
+  open: el => { S.fiche = el.dataset.id; S.view = 'fiche'; render(); },
+  delete: el => {
+    if (!confirm('Supprimer ce projet du dashboard ?')) return;
+    S.projects = S.projects.filter(p => p.id !== el.dataset.id); persistProjects(); render();
+  },
+  print: () => window.print(),
+  'dl-md': el => { const p = S.projects.find(x => x.id === el.dataset.id); download(`fiche-cadrage-${slug(p.answers.title)}.md`, ficheMarkdown(p), 'text/markdown;charset=utf-8'); },
+  'copy-md': async el => {
+    const p = S.projects.find(x => x.id === el.dataset.id);
+    try { await navigator.clipboard.writeText(ficheMarkdown(p)); el.textContent = 'Copié ✓'; } catch { el.textContent = 'Copie impossible'; }
+  },
+  'export-csv': () => {
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [['Réf', 'Projet', 'Demandeur', 'Catégorie', 'Statut', 'Responsable métier', 'Date'].map(q).join(';'),
+      ...S.projects.map(p => [p.id, p.answers.title, p.answers.requester, CATEGORY[p.verdict.category], STATUS[p.verdict.status].label, p.answers.referentName, fmtDate(p.date)].map(q).join(';'))];
+    download('projets.csv', '﻿' + lines.join('\n'), 'text/csv;charset=utf-8');
+  },
+};
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-action]');
+  if (el && ACTIONS[el.dataset.action]) ACTIONS[el.dataset.action](el);
+});
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (t.dataset.field && S.draft) { S.draft.a[t.dataset.field] = t.value; persistDraft(); }
+  if (t.id === 'f-q') { S.filter.q = t.value; render(); const i = document.getElementById('f-q'); i.focus(); i.setSelectionRange(t.value.length, t.value.length); }
+});
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-status') { S.filter.status = e.target.value; render(); }
+  if (e.target.id === 'f-cat') { S.filter.cat = e.target.value; render(); }
+});
+
+render();
+})();
+</script>
+</body>
+</html>
