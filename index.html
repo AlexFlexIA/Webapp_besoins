@@ -215,6 +215,16 @@ const S = {
   error: '',
 };
 const persistProjects = () => save(STORE_KEY, S.projects);
+
+/* Persistance partagée : Google Apps Script (feuille Google Sheets) si disponible, sinon localStorage */
+const GAS = typeof google !== 'undefined' && google.script && google.script.run;
+const callServer = (fn, ...args) => new Promise((ok, ko) => google.script.run.withSuccessHandler(ok).withFailureHandler(ko)[fn](...args));
+const syncError = e => alert('Échec de la synchronisation avec Google Sheets : ' + (e && e.message || e));
+const store = {
+  async load() { if (GAS) { S.projects = await callServer('getProjects'); persistProjects(); render(); } },
+  save(p) { persistProjects(); if (GAS) callServer('saveProject', p).catch(syncError); },
+  remove(id) { persistProjects(); if (GAS) callServer('deleteProject', id).catch(syncError); },
+};
 const persistDraft = () => save(DRAFT_KEY, S.draft);
 
 /* ---------- Utilitaires ---------- */
@@ -539,14 +549,14 @@ const ACTIONS = {
   flag: el => { S.draft.a[el.dataset.key] = !S.draft.a[el.dataset.key]; persistDraft(); render(); },
   submit: () => {
     const p = buildProject(S.draft.a);
-    S.projects.unshift(p); persistProjects();
+    S.projects.unshift(p); store.save(p);
     S.draft = null; persistDraft();
     S.fiche = p.id; S.view = 'fiche'; render(); window.scrollTo(0, 0);
   },
   open: el => { S.fiche = el.dataset.id; S.view = 'fiche'; render(); },
   delete: el => {
     if (!confirm('Supprimer ce projet du dashboard ?')) return;
-    S.projects = S.projects.filter(p => p.id !== el.dataset.id); persistProjects(); render();
+    S.projects = S.projects.filter(p => p.id !== el.dataset.id); store.remove(el.dataset.id); render();
   },
   print: () => window.print(),
   'dl-md': el => { const p = S.projects.find(x => x.id === el.dataset.id); download(`fiche-cadrage-${slug(p.answers.title)}.md`, ficheMarkdown(p), 'text/markdown;charset=utf-8'); },
@@ -578,6 +588,7 @@ document.addEventListener('change', e => {
 });
 
 render();
+store.load().catch(syncError);
 })();
 </script>
 </body>
