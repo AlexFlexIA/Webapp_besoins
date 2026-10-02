@@ -84,22 +84,41 @@ const TEAM_GROUPS = [
     ['com', 'Communication', 'support'], ['droits', 'Gestion droits', 'simetier'], ['rgpd', 'RGPD', 'support'], ['juridique', 'Juridique & contrat', 'support'] ] },
 ];
 
+const DOMAINS = [
+  ['achats', 'Achats'], ['planning', 'Planning'], ['supply', 'Supply'], ['transport', 'Transport / logistique'],
+  ['exploitation', 'Exploitation / production'], ['qualite', 'Qualité'], ['ventes', 'Ventes / ADV'],
+  ['finance', 'Finance / CDG'], ['reporting', 'Reporting'], ['process', 'Process / conduite du changement'], ['autre', 'Autre domaine'],
+];
 const SCOPE_OK = [
-  ['saisie',  'Simplifier la saisie (formulaires, listes, contrôles)'],
-  ['calcul',  'Automatiser des calculs / consolidations'],
-  ['vues',    'Vues, priorisation, tableaux de bord de lecture'],
-  ['export',  'Export / impression de documents'],
+  ['saisie',     'Simplifier la saisie (formulaires, listes, contrôles)'],
+  ['calcul',     'Automatiser des calculs / consolidations'],
+  ['prevision',  'Prévisions / simulations (appros, engrais, production, volumes)'],
+  ['priorisation','Priorisation / aide à la décision'],
+  ['planif',     'Planification ou ordonnancement léger'],
+  ['suivi',      'Suivi d’indicateurs (stocks, transport, qualité, ventes…)'],
+  ['rapprochement','Rapprochement / contrôle de cohérence de fichiers'],
+  ['import',     'Import, nettoyage et consolidation de données'],
+  ['vues',       'Vues et tableaux de bord de lecture'],
+  ['export',     'Export / impression de documents'],
 ];
 const SCOPE_DRIFT = [
   ['erp_rt',  'Connexion ERP en temps réel', true],
   ['mail_wf', 'Gestion lourde de mails / workflows de validation', true],
   ['transac', 'Gestion transactionnelle (commandes, stocks, facturation)', false],
   ['refs',    'Référentiels ERP synchronisés (articles, clients, fournisseurs)', false],
+  ['interfaces', 'Interfaces avec des systèmes tiers (EDI, API, TMS/WMS…)', false],
 ];
+/* [clé, libellé, rejet ?] — rejet = renvoi DSI ; sinon point de vigilance à cadrer avec la DSI */
 const HEAVY = [
-  ['erp_rt',  'Connexions ERP en temps réel'],
-  ['mail_wf', 'Gestion lourde de mails / workflows'],
-  ['none',    'Aucun de ces éléments'],
+  ['erp_rt',  'Connexions ERP en temps réel', true],
+  ['mail_wf', 'Gestion lourde de mails / workflows', true],
+  ['transac', 'Gestion transactionnelle (commandes, stocks, facturation)', false],
+  ['refs',    'Référentiels ERP synchronisés (articles, clients, fournisseurs)', false],
+  ['interfaces', 'Interfaces avec des systèmes tiers (EDI, API, TMS/WMS…)', false],
+  ['droits',  'Gestion fine des droits / habilitations par profil', false],
+  ['reglementaire', 'Données réglementaires ou sensibles (traçabilité, RGPD, qualité)', false],
+  ['volume',  'Forte volumétrie, multi-sites ou nombreux utilisateurs simultanés', false],
+  ['none',    'Aucun de ces éléments', false],
 ];
 const labelOf = (list, k) => (list.find(x => x[0] === k) || [])[1] || k;
 
@@ -166,6 +185,8 @@ function computeVerdict(a) {
 
   if (missing.length) blockers.push('Filtres bloquants non satisfaits : ' + missing.join(', ') + '.');
   if (status === 'GO_RESERVE') reserves.push("Scope strictement limité aux fonctions listées ; toute dérive vers un périmètre ERP rebascule automatiquement le projet en Catégorie 1.");
+  const watch = HEAVY.filter(([k, , rej]) => !rej && k !== 'none' && has(a, 'heavy', k)).map(x => x[1]);
+  if (cat === 1 && watch.length) reserves.push('Points de vigilance à cadrer avec la DSI : ' + watch.join(' ; ') + '.');
   if (status === 'GO' && cat === 1) reserves.push("Solution temporaire : reprise par la DSI à terme (engagement obtenu).");
   if (rebascule(a)) reserves.unshift("Le projet a été rebasculé de la Catégorie 2 vers la Catégorie 1 (dérive vers un périmètre ERP).");
 
@@ -176,12 +197,14 @@ function computeVerdict(a) {
 const yn = (id, title, help, extra = {}) => ({ id, type: 'yesno', title, help, ...extra });
 const STEPS = [
   { id: 'identity', type: 'identity', title: 'Identification de la demande', help: 'Décrivez le besoin et ses limites de périmètre.' },
+  { id: 'domains', type: 'multi', key: 'domains', required: true, title: 'Quels domaines de la supply chain sont concernés ?',
+    help: "Plusieurs domaines possibles : l'outil peut servir toute la supply chain.", options: () => DOMAINS.map(([k, l]) => [k, l, false]) },
   yn('market', "Le besoin relève-t-il d'un périmètre couvert par un outil du marché ou par l'ERP ?",
      "Ex. ordonnancement Campénéac/Glomel, gestion complète des réclamations."),
   yn('costly', "Le déploiement de l'outil / ERP est-il trop cher ou trop long pour répondre au besoin immédiat ?",
      "« Non » signifie que la solution du marché doit être privilégiée.", { show: a => a.market === 'yes' }),
-  yn('manual', "Le besoin consiste-t-il à automatiser un travail manuel ou à désengorger des fichiers Google Sheets ?",
-     "Sujet non couvert par le marché (ex. prévisions engrais, priorisation).", { show: a => a.market === 'no' }),
+  yn('manual', "Le besoin vise-t-il à faire gagner du temps : automatiser une tâche manuelle, simplifier un process ou désengorger des fichiers Google Sheets ?",
+     "Sujet non couvert par le marché, sur tout domaine de la supply chain (ex. prévisions engrais, priorisation, rapprochements de fichiers, suivi d'indicateurs).", { show: a => a.market === 'no' }),
   { id: 'scope', type: 'multi', key: 'scope', title: "Que doit faire l'outil ? (cochez tout ce qui est prévu)",
     help: "Le scope doit rester strictement limité. Les éléments ERP font basculer le projet en Catégorie 1.",
     show: a => a.market === 'no' && a.manual === 'yes',
@@ -190,8 +213,8 @@ const STEPS = [
      "Un « Non » révèle une dérive de périmètre : le projet rebascule en Catégorie 1.",
      { show: a => a.market === 'no' && a.manual === 'yes' }),
   { id: 'heavy', type: 'multi', key: 'heavy', exclusive: 'none', title: 'La demande inclut-elle des éléments lourds ?',
-    help: "Connexions ERP temps réel ou gestion lourde de mails/workflows → rejet du développement interne.",
-    show: a => category(a) === 1 && !rebascule(a), options: () => HEAVY.map(([k, l]) => [k, l, k !== 'none']) },
+    help: "Connexions ERP temps réel ou gestion lourde de mails/workflows → rejet du développement interne. Les autres éléments sont des points de vigilance à cadrer avec la DSI.",
+    show: a => category(a) === 1 && !rebascule(a), options: () => HEAVY.map(([k, l, rej]) => [k, l, rej]) },
   yn('dsiValid', "La DSI a-t-elle validé cette solution palliative ?", "Validation DSI obligatoire pour la Catégorie 1.",
      { show: a => category(a) === 1 }),
   yn('temp', "Existe-t-il un engagement de reprise par la DSI à terme (caractère temporaire) ?",
@@ -236,10 +259,11 @@ const catBadge = c => badge(c === 1 ? 'bg-[#F8F5A7] text-[#514F21] ring-[#E8E22F
 const uid = () => 'P-' + Date.now().toString(36).toUpperCase();
 
 /* ---------- Fiche de cadrage ---------- */
+const domainNames = a => DOMAINS.filter(([k]) => (a.domains || []).includes(k)).map(x => x[1]).join(', ');
 function scopeLists(a) {
   const sel = a.scope || [];
   return {
-    inScope: SCOPE_OK.filter(([k]) => sel.includes(k)).map(x => x[1]),
+    inScope: [...SCOPE_OK.filter(([k]) => sel.includes(k)).map(x => x[1]), ...((a.scopeOther || '').trim() ? ['Autre : ' + a.scopeOther.trim()] : [])],
     drift: SCOPE_DRIFT.filter(([k]) => sel.includes(k)).map(x => x[1]),
   };
 }
@@ -257,6 +281,7 @@ function ficheMarkdown(p) {
   L.push(`# Fiche de cadrage — ${a.title}`, '', `**Référence :** ${p.id} · **Date :** ${fmtDate(p.date)}`, '');
   L.push(`**Statut :** ${STATUS[v.status].label}`, `**Catégorie :** ${CATEGORY[v.category]}`, '');
   L.push('## Demandeur', `- Demandeur : ${a.requester || '—'}`, `- Service : ${a.service || '—'}`, '');
+  L.push('## Domaines concernés', domainNames(a) || '—', '');
   L.push('## Besoin exprimé', a.description || '—', '');
   L.push('## Limites de périmètre', a.limits || '—', '');
   if (sl.inScope.length) L.push('**Fonctions dans le scope :**', ...sl.inScope.map(x => `- ${x}`), '');
@@ -308,6 +333,7 @@ function ficheHtml(p) {
     </div>
     <h2>Demandeur</h2>
     <p>${esc(a.requester || '—')} · ${esc(a.service || '—')}</p>
+    <h2>Domaines concernés</h2><p>${esc(domainNames(a) || '—')}</p>
     <h2>Besoin exprimé</h2>${para(a.description)}
     <h2>Limites de périmètre</h2>${para(a.limits)}
     ${sl.inScope.length ? `<p class="mt-2 font-medium">Fonctions dans le scope</p>${ul(sl.inScope)}` : ''}
@@ -406,7 +432,9 @@ function stepBody(step, a) {
       const warn = step.id === 'scope' && drift(a) && a.market === 'no'
         ? `<div class="mt-3 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded p-3">⚠ Dérive vers un périmètre ERP : le projet rebasculera en <strong>Catégorie 1</strong>.</div>` : '';
       return `<div class="space-y-2">${step.options(a).map(([k, l, isDrift]) =>
-        choiceBtn('toggle', `data-key="${step.key}" data-val="${k}"`, l + (isDrift && step.id === 'scope' ? '  (périmètre ERP)' : ''), cur.includes(k))).join('')}</div>${warn}`;
+        choiceBtn('toggle', `data-key="${step.key}" data-val="${k}"`, l + (isDrift && step.id === 'scope' ? '  (périmètre ERP)' : isDrift && step.id === 'heavy' ? '  (renvoi DSI)' : ''), cur.includes(k))).join('')}</div>
+        ${step.id === 'scope' ? `<label class="block mt-3"><span class="text-sm font-medium">Autre gain de temps / automatisation (précisez)</span>
+          <input data-field="scopeOther" value="${esc(a.scopeOther || '')}" placeholder="Ex. génération automatique d'un planning de chargement" class="mt-1 w-full border border-slate-300 rounded px-3 py-2 text-sm"></label>` : ''}${warn}`;
     }
     case 'team': {
       const t = a.team || {};
@@ -506,7 +534,7 @@ function validate(step, a) {
       if (!(a[k] || '').trim()) return `Le champ « ${l} » est obligatoire.`;
   }
   if (step.type === 'yesno' && !a[step.id]) return 'Veuillez répondre à la question.';
-  if (step.type === 'multi' && step.id === 'heavy' && !(a.heavy || []).length) return 'Sélectionnez au moins une option.';
+  if (step.type === 'multi' && (step.id === 'heavy' || step.required) && !(a[step.key] || []).length) return 'Sélectionnez au moins une option.';
   return '';
 }
 
