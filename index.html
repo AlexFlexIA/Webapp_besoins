@@ -53,11 +53,13 @@ const STATUS = {
   GO_RESERVE:     { label: 'GO sous réserve - Scope restreint',    cls: 'bg-[#F5A161]/40 text-[#7a3d06] ring-[#F5A161]',       big: 'bg-[#E17739]' },
   NO_GO_DSI:      { label: 'NO-GO - Orienté DSI',                  cls: 'bg-[#E1786F]/30 text-[#8a1f1a] ring-[#E1786F]',          big: 'bg-[#D83832]' },
   NO_GO_REFERENT: { label: 'NO-GO - Manque de Référent Métier',    cls: 'bg-[#E1786F]/30 text-[#8a1f1a] ring-[#E1786F]',          big: 'bg-[#D83832]' },
-  NO_GO_PREREQ:   { label: 'NO-GO - Prérequis bloquants manquants',cls: 'bg-[#E1786F]/30 text-[#8a1f1a] ring-[#E1786F]',          big: 'bg-[#D83832]' },
+  NO_GO_PREREQ:   { label: 'NO-GO - Accord des parties prenantes manquant',cls: 'bg-[#E1786F]/30 text-[#8a1f1a] ring-[#E1786F]',          big: 'bg-[#D83832]' },
 };
+const ownerOf = st => st === 'NO_GO_DSI' ? 'DSI' : (st === 'GO' || st === 'GO_RESERVE') ? 'Métier — webapp' : 'À confirmer (prérequis manquants)';
 const CATEGORY = {
-  1: 'Cat. 1 · Palliatif temporaire DSI / ERP',
-  2: 'Cat. 2 · Simplification & outillage métier (GSheets)',
+  1: 'Cat. 1 · Périmètre outil du marché / ERP',
+  2: 'Cat. 2 · Simplification & outillage métier (webapp)',
+
   0: 'Hors catégorie',
 };
 
@@ -138,7 +140,6 @@ const rebascule = a => a.market === 'no' && a.manual === 'yes' && drift(a);
 function filters(a) {
   return {
     referent: !!(a.f_referent && (a.referentName || '').trim()),
-    env:      !!a.f_env,
     parties:  !!a.f_parties,
   };
 }
@@ -157,24 +158,19 @@ function computeVerdict(a) {
   if (cat === 1) {
     if (heavy(a)) {
       dsi = true;
-      blockers.push("La demande inclut des connexions ERP temps réel et/ou une gestion lourde de mails/workflows : développement interne rejeté, réorientation vers la DSI.");
+      blockers.push("Périmètre trop large (connexions ERP temps réel et/ou gestion lourde de mails/workflows) : à prendre en charge par la DSI.");
     }
     if (a.market === 'yes' && a.costly === 'no') {
       dsi = true;
-      blockers.push("L'outil/ERP du marché est déployable à coût et délai acceptables : pas de palliatif interne justifié.");
+      blockers.push("L'outil/ERP du marché est déployable à coût et délai acceptables : le sujet est à prendre en charge par la DSI.");
     }
     if (a.dsiValid !== 'yes') {
       dsi = true;
-      blockers.push("Validation DSI obligatoire non obtenue.");
-    }
-    if (a.temp !== 'yes') {
-      dsi = true;
-      blockers.push("Pas d'engagement de reprise par la DSI à terme : le caractère temporaire n'est pas garanti.");
+      blockers.push("Périmètre ERP sans validation de la DSI : à prendre en charge par la DSI.");
     }
   }
   const missing = [];
   if (!f.referent) missing.push('Responsable métier désigné');
-  if (!f.env)      missing.push('Environnement de développement');
   if (!f.parties)  missing.push('Accord des parties prenantes');
 
   let status;
@@ -187,7 +183,6 @@ function computeVerdict(a) {
   if (status === 'GO_RESERVE') reserves.push("Scope strictement limité aux fonctions listées ; toute dérive vers un périmètre ERP rebascule automatiquement le projet en Catégorie 1.");
   const watch = HEAVY.filter(([k, , rej]) => !rej && k !== 'none' && has(a, 'heavy', k)).map(x => x[1]);
   if (cat === 1 && watch.length) reserves.push('Points de vigilance à cadrer avec la DSI : ' + watch.join(' ; ') + '.');
-  if (status === 'GO' && cat === 1) reserves.push("Solution temporaire : reprise par la DSI à terme (engagement obtenu).");
   if (rebascule(a)) reserves.unshift("Le projet a été rebasculé de la Catégorie 2 vers la Catégorie 1 (dérive vers un périmètre ERP).");
 
   return { status, category: cat, blockers, reserves, missing };
@@ -215,13 +210,11 @@ const STEPS = [
   { id: 'heavy', type: 'multi', key: 'heavy', exclusive: 'none', title: 'La demande inclut-elle des éléments lourds ?',
     help: "Connexions ERP temps réel ou gestion lourde de mails/workflows → rejet du développement interne. Les autres éléments sont des points de vigilance à cadrer avec la DSI.",
     show: a => category(a) === 1 && !rebascule(a), options: () => HEAVY.map(([k, l, rej]) => [k, l, rej]) },
-  yn('dsiValid', "La DSI a-t-elle validé cette solution palliative ?", "Validation DSI obligatoire pour la Catégorie 1.",
+  yn('dsiValid', "La DSI valide-t-elle que le métier prenne ce sujet en charge avec une webapp ?", "Validation DSI obligatoire pour un périmètre outil du marché / ERP.",
      { show: a => category(a) === 1 }),
-  yn('temp', "Existe-t-il un engagement de reprise par la DSI à terme (caractère temporaire) ?",
-     "Sans engagement de reprise, le palliatif n'est pas acceptable.", { show: a => category(a) === 1 }),
   { id: 'team', type: 'team', title: 'Équipe projet', help: "Renseignez les intervenants connus (optionnel). Les rôles non désignés apparaîtront « À désigner » dans la fiche de cadrage." },
   { id: 'filters', type: 'filters', title: 'Filtres bloquants (NO-GO si non cochés)',
-    help: "Ces trois conditions sont obligatoires, quelle que soit la catégorie." },
+    help: "Ces deux conditions sont obligatoires, quelle que soit la catégorie." },
   { id: 'result', type: 'result', title: 'Verdict & fiche de cadrage', help: '' },
 ];
 const visibleSteps = a => STEPS.filter(s => !s.show || s.show(a));
@@ -279,7 +272,7 @@ function ficheMarkdown(p) {
   const { a, v, f, sl } = ficheModel(p);
   const L = [];
   L.push(`# Fiche de cadrage — ${a.title}`, '', `**Référence :** ${p.id} · **Date :** ${fmtDate(p.date)}`, '');
-  L.push(`**Statut :** ${STATUS[v.status].label}`, `**Catégorie :** ${CATEGORY[v.category]}`, '');
+  L.push(`**Statut :** ${STATUS[v.status].label}`, `**Catégorie :** ${CATEGORY[v.category]}`, `**Prise en charge :** ${ownerOf(v.status)}`, '');
   L.push('## Demandeur', `- Demandeur : ${a.requester || '—'}`, `- Service : ${a.service || '—'}`, '');
   L.push('## Domaines concernés', domainNames(a) || '—', '');
   L.push('## Besoin exprimé', a.description || '—', '');
@@ -289,7 +282,6 @@ function ficheMarkdown(p) {
   L.push('## Responsable métier', `- Nom : ${(a.referentName || '').trim() || '—'}`, '');
   L.push('## Filtres bloquants',
     `- ${check(f.referent)} Responsable métier désigné (aisance informatique, gestion/maintenance de l'usage)`,
-    `- ${check(f.env)} Environnement de développement propre, isolé et efficace`,
     `- ${check(f.parties)} Accord des parties prenantes (GO en instance d'arbitrage)`, '');
   L.push('## Équipe projet', '*Gouvernance : COPIL (décision) · COPROJ (suivi projet)*', '');
   for (const g of TEAM_GROUPS) {
@@ -297,7 +289,7 @@ function ficheMarkdown(p) {
     for (const [id, l, ty] of g.roles) L.push(`- ${l} (${TEAM_TYPES[ty].label}) : ${((a.team || {})[id] || '').trim() || 'À désigner'}`);
     L.push('');
   }
-  if (v.category === 1) L.push('## Engagements DSI', `- Validation DSI : ${yesNo(a.dsiValid)}`, `- Engagement de reprise à terme : ${yesNo(a.temp)}`, '');
+  if (v.category === 1) L.push('## Validation DSI', `- Validation DSI : ${yesNo(a.dsiValid)}`, '');
   if (v.blockers.length) L.push('## Motifs de blocage', ...v.blockers.map(x => `- ${x}`), '');
   if (v.reserves.length) L.push('## Réserves', ...v.reserves.map(x => `- ${x}`), '');
   return L.join('\n');
@@ -329,7 +321,7 @@ function ficheHtml(p) {
         <h1 class="text-2xl font-extrabold">${esc(a.title)}</h1>
         <div class="text-slate-300 text-xs mt-1">Réf. ${esc(p.id)} · ${fmtDate(p.date)} · Eureden — La terre nous réunit</div>
       </div>
-      <div class="text-right space-y-1 bg-white rounded-lg p-2">${statusBadge(v.status)}<br>${catBadge(v.category)}</div>
+      <div class="text-right space-y-1 bg-white rounded-lg p-2">${statusBadge(v.status)}<br>${catBadge(v.category)}<br><span class="inline-block text-xs font-bold text-black">Prise en charge : ${esc(ownerOf(v.status))}</span></div>
     </div>
     <h2>Demandeur</h2>
     <p>${esc(a.requester || '—')} · ${esc(a.service || '—')}</p>
@@ -343,10 +335,9 @@ function ficheHtml(p) {
     <h2>Filtres bloquants</h2>
     <ul class="space-y-0.5 list-none">
       ${row(f.referent, "Responsable métier désigné (aisance informatique, gestion/maintenance de l'usage)")}
-      ${row(f.env, 'Environnement de développement propre, isolé et efficace')}
       ${row(f.parties, "Accord des parties prenantes (GO en instance d'arbitrage)")}
     </ul>
-    ${v.category === 1 ? `<h2>Engagements DSI</h2><ul class="list-disc ml-5"><li>Validation DSI : ${yesNo(a.dsiValid)}</li><li>Engagement de reprise à terme : ${yesNo(a.temp)}</li></ul>` : ''}
+    ${v.category === 1 ? `<h2>Validation DSI</h2><ul class="list-disc ml-5"><li>Validation DSI : ${yesNo(a.dsiValid)}</li></ul>` : ''}
     <h2>Équipe projet</h2>${teamHtml(a)}
     ${v.blockers.length ? `<h2>Motifs de blocage</h2>${ul(v.blockers)}` : ''}
     ${v.reserves.length ? `<h2>Réserves</h2>${ul(v.reserves)}` : ''}
@@ -386,7 +377,7 @@ function viewDashboard() {
   <div class="bg-white border border-slate-200 rounded-lg overflow-x-auto">
     <table class="w-full text-sm">
       <thead class="bg-slate-100 text-left text-xs uppercase text-slate-500">
-        <tr><th class="p-3">Projet</th><th class="p-3">Catégorie</th><th class="p-3">Statut</th><th class="p-3">Responsable métier</th><th class="p-3">Date</th><th class="p-3"></th></tr>
+        <tr><th class="p-3">Projet</th><th class="p-3">Catégorie</th><th class="p-3">Statut</th><th class="p-3">Prise en charge</th><th class="p-3">Responsable métier</th><th class="p-3">Date</th><th class="p-3"></th></tr>
       </thead>
       <tbody>
       ${rows.map(p => `
@@ -394,13 +385,14 @@ function viewDashboard() {
           <td class="p-3"><div class="font-medium">${esc(p.answers.title)}</div><div class="text-xs text-slate-500">${esc(p.id)} · ${esc(p.answers.requester || '')}</div></td>
           <td class="p-3">${catBadge(p.verdict.category)}</td>
           <td class="p-3">${statusBadge(p.verdict.status)}</td>
+          <td class="p-3 font-medium">${esc(ownerOf(p.verdict.status))}</td>
           <td class="p-3">${esc((p.answers.referentName || '').trim() || '—')}</td>
           <td class="p-3 whitespace-nowrap">${fmtDate(p.date)}</td>
           <td class="p-3 whitespace-nowrap text-right">
             <button data-action="open" data-id="${esc(p.id)}" class="text-black font-medium underline decoration-[#E8E22F] decoration-2 hover:bg-[#F8F5A7] mr-3">Fiche</button>
             <button data-action="delete" data-id="${esc(p.id)}" class="text-slate-400 hover:text-rose-600">Supprimer</button>
           </td>
-        </tr>`).join('') || `<tr><td colspan="6" class="p-8 text-center text-slate-500">${all.length ? 'Aucun résultat pour ces filtres.' : 'Aucun projet soumis. Lancez une première qualification.'}</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="7" class="p-8 text-center text-slate-500">${all.length ? 'Aucun résultat pour ces filtres.' : 'Aucun projet soumis. Lancez une première qualification.'}</td></tr>`}
       </tbody>
     </table>
   </div>`;
@@ -454,7 +446,6 @@ function stepBody(step, a) {
         <label class="block"><span class="text-sm font-medium">Nom du responsable métier</span>
           <input data-field="referentName" value="${esc(a.referentName || '')}" placeholder="Nom Prénom" class="mt-1 w-full border border-slate-300 rounded px-3 py-2 text-sm"></label>
         ${box('f_referent', 'Responsable métier désigné', "Porteur identifié nominativement, avec l'aisance informatique requise, qui s'engage à gérer/maintenir l'usage de l'application.")}
-        ${box('f_env', 'Environnement de développement', 'Un environnement de dev propre, isolé et efficace est disponible pour l’équipe technique.')}
         ${box('f_parties', 'Accord des parties prenantes', 'GO explicite obtenu en instance d’arbitrage (contrôle de gestion / direction).')}</div>`;
     }
   }
@@ -472,7 +463,7 @@ function viewWizard() {
   if (step.type === 'result') {
     const p = buildProject(a), v = p.verdict;
     body = `
-      <div class="rounded-lg text-white p-5 ${STATUS[v.status].big}"><div class="text-xs uppercase opacity-80">Verdict automatisé</div><div class="text-xl font-semibold">[${esc(STATUS[v.status].label)}]</div><div class="text-sm opacity-90 mt-1">${esc(CATEGORY[v.category])}</div></div>
+      <div class="rounded-lg text-white p-5 ${STATUS[v.status].big}"><div class="text-xs uppercase opacity-80">Verdict automatisé</div><div class="text-xl font-semibold">[${esc(STATUS[v.status].label)}]</div><div class="text-sm opacity-90 mt-1">${esc(CATEGORY[v.category])}</div><div class="mt-3 inline-block bg-white text-black rounded px-3 py-1 text-sm font-bold">Prise en charge : ${esc(ownerOf(v.status))}</div></div>
       ${v.blockers.length ? `<h3 class="font-semibold mt-5 mb-1">Motifs</h3><ul class="list-disc ml-5 text-sm space-y-1">${v.blockers.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
       ${v.reserves.length ? `<h3 class="font-semibold mt-5 mb-1">Réserves</h3><ul class="list-disc ml-5 text-sm space-y-1">${v.reserves.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
       <p class="text-sm text-slate-500 mt-5">Enregistrez la demande pour l’ajouter au dashboard et générer la fiche de cadrage. Les demandes NO-GO sont conservées pour traçabilité.</p>`;

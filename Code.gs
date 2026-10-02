@@ -48,7 +48,7 @@ function getProjects() {
 
 const STATUS_LABELS_ = {
   GO: 'GO', GO_RESERVE: 'GO sous réserve - Scope restreint', NO_GO_DSI: 'NO-GO - Orienté DSI',
-  NO_GO_REFERENT: 'NO-GO - Manque de Référent Métier', NO_GO_PREREQ: 'NO-GO - Prérequis bloquants manquants',
+  NO_GO_REFERENT: 'NO-GO - Manque de Référent Métier', NO_GO_PREREQ: 'NO-GO - Accord des parties prenantes manquant',
 };
 
 function saveProject(p) {
